@@ -146,11 +146,52 @@
 
   let remaining = INTERVAL;
   let tickId = null;
-  let audioCtx = null;
-  let alarmOsc = null;
-  let alarmGain = null;
   let wakeLock = null;
   let cycles = 0;
+  let alarmPlaying = false;
+  let alarmLoopId = null;
+
+  // Generate a WAV alarm tone as a data URL (works reliably on mobile)
+  function generateAlarmWav() {
+    const sampleRate = 22050;
+    const duration = 1.2; // seconds
+    const numSamples = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+
+    // WAV header
+    const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+
+    // Generate alternating tones: 880Hz and 660Hz, switching every 0.3s
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+      const freq = (Math.floor(t / 0.3) % 2 === 0) ? 880 : 660;
+      const sample = Math.sin(2 * Math.PI * freq * t) * 0.4;
+      view.setInt16(44 + i * 2, sample * 32767, true);
+    }
+
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  }
+
+  const alarmUrl = generateAlarmWav();
+  const alarmAudio = new Audio(alarmUrl);
+  alarmAudio.loop = true;
+  // Preload
+  alarmAudio.load();
 
   function fmt(s) {
     const m = String(Math.floor(s / 60)).padStart(2, '0');
@@ -171,49 +212,37 @@
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
   }
 
-  // Re-acquire wake lock when tab becomes visible again
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && tickId) requestWakeLock();
   });
 
-  function ensureAudioCtx() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+  // Unlock audio on iOS by playing a silent moment on user tap
+  function unlockAudio() {
+    alarmAudio.muted = true;
+    alarmAudio.play().then(() => {
+      alarmAudio.pause();
+      alarmAudio.muted = false;
+      alarmAudio.currentTime = 0;
+    }).catch(() => {});
   }
 
   function startAlarm() {
-    ensureAudioCtx();
-    alarmGain = audioCtx.createGain();
-    alarmGain.gain.value = 0.35;
-    alarmGain.connect(audioCtx.destination);
+    alarmPlaying = true;
+    alarmAudio.currentTime = 0;
+    alarmAudio.play().catch(() => {});
 
-    alarmOsc = audioCtx.createOscillator();
-    alarmOsc.type = 'square';
-    alarmOsc.frequency.value = 880;
-    alarmOsc.connect(alarmGain);
-    alarmOsc.start();
-
-    let high = true;
-    alarmOsc._intervalId = setInterval(() => {
-      high = !high;
-      alarmOsc.frequency.value = high ? 880 : 660;
-    }, 400);
-
-    // Also vibrate on mobile if supported
+    // Vibrate on Android
     if (navigator.vibrate) {
-      alarmOsc._vibrateId = setInterval(() => navigator.vibrate(200), 500);
+      alarmLoopId = setInterval(() => navigator.vibrate([200, 100, 200]), 600);
+      navigator.vibrate([200, 100, 200]);
     }
   }
 
   function stopAlarm() {
-    if (alarmOsc) {
-      clearInterval(alarmOsc._intervalId);
-      clearInterval(alarmOsc._vibrateId);
-      alarmOsc.stop();
-      alarmOsc.disconnect();
-      alarmOsc = null;
-    }
-    if (alarmGain) { alarmGain.disconnect(); alarmGain = null; }
+    alarmPlaying = false;
+    alarmAudio.pause();
+    alarmAudio.currentTime = 0;
+    if (alarmLoopId) { clearInterval(alarmLoopId); alarmLoopId = null; }
     if (navigator.vibrate) navigator.vibrate(0);
   }
 
@@ -254,7 +283,7 @@
   }
 
   startBtn.addEventListener('click', () => {
-    ensureAudioCtx(); // unlock audio on first user gesture
+    unlockAudio(); // critical: unlock audio on user tap for iOS
     startBtn.style.display = 'none';
     stopBtn.style.display = 'inline-block';
     remaining = INTERVAL;

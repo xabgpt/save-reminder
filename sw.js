@@ -1,4 +1,4 @@
-const CACHE_NAME = 'save-reminder-v2';
+const CACHE_NAME = 'save-reminder-v3';
 const ASSETS = ['./', 'index.html', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
