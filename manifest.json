@@ -2,7 +2,7 @@
   "name": "Save Reminder",
   "short_name": "SaveReminder",
   "description": "Reminds you to save your work every 5 minutes",
-  "start_url": "/index.html",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
